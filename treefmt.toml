@@ -1,0 +1,4 @@
+[formatter.shell]
+command = "shfmt"
+options = ["-i", "2", "-sr", "-w"]
+includes = ["*.sh", "*.bash", "*.zsh"]
