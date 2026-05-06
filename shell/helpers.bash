@@ -14,7 +14,7 @@ rbf() {
   [[ ${#actions[@]} -eq 0 ]] && actions+=("switch")
 
   if [[ -d "/etc/nixos" ]]; then
-    cd /etc/nixos || return 1
+    pushd /etc/nixos > /dev/null || return 1
   else
     echo "Error: /etc/nixos not found." >&2
     return 1
@@ -65,8 +65,11 @@ rbf() {
     else
       echo "Rebuild successful (No Git history to update)."
     fi
+    popd > /dev/null || true
+    return 0
   else
     echo "Rebuild failed."
+    popd > /dev/null || true
     return 1
   fi
 }
