@@ -3,24 +3,16 @@ rbf() (
   local extra_args=()
   local do_update=false
 
-  # Argument parsing
   for arg in "$@"; do
     case "$arg" in
-    boot | switch | test)
-      actions+=("$arg")
-      ;;
-    --up | --update)
-      do_update=true
-      ;;
-    *)
-      extra_args+=("$arg")
-      ;;
+    boot | switch | test) actions+=("$arg") ;;
+    --up | --update) do_update=true ;;
+    *) extra_args+=("$arg") ;;
     esac
   done
 
   [[ ${#actions[@]} -eq 0 ]] && actions+=("switch")
 
-  # Move to config directory
   if [[ -d "/etc/nixos" ]]; then
     cd /etc/nixos || return 1
   else
@@ -28,46 +20,53 @@ rbf() (
     return 1
   fi
 
-  # Git preparation
-  sudo git add .
-  sudo git update-index --refresh
+  local is_git=false
+  if [[ -d ".git" ]]; then
+    is_git=true
+    # Ensure all files are tracked so Nix Flakes can see them
+    git add .
+    # Refresh index to avoid "false" dirty state errors
+    git update-index -q --refresh
+  fi
 
   if [[ "$do_update" == true ]]; then
     echo "Checking for updates..."
     sudo nix flake update
-    sudo git add flake.lock
+    [[ "$is_git" == true ]] && git add flake.lock
   fi
 
-  # Commit dirty tree before rebuild
-  if ! sudo git diff --cached --quiet; then
-    local real_user=${SUDO_USER:-$(id -un)}
+  if [[ "$is_git" == true ]] && ! git diff --cached --quiet; then
+    local real_user=${SUDO_USER:-$USER}
     local real_host=$(hostname)
-    local files=$(sudo git diff --cached --name-only | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+    local files=$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
     local msg="Pre-rebuild (${actions[*]}): $files"
 
-    echo "Committing changes to clear dirty tree..."
-    sudo git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
+    echo "Committing changes: $msg"
+    git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
       commit -m "$msg"
   fi
 
-  # Execution loop
   local success=true
   for action in "${actions[@]}"; do
-    echo "Executing NixOS $action"
+    echo "Executing NixOS $action..."
     if ! sudo nixos-rebuild "$action" --flake . "${extra_args[@]}"; then
       success=false
+      break
     fi
   done
 
-  # Finalize commit with generation info
   if [[ "$success" == true ]]; then
-    local gen=$(sudo nixos-rebuild list-generations --flake . | grep True | awk '{print $1}')
-    local real_user=${SUDO_USER:-$(id -un)}
-    local real_host=$(hostname)
+    if [[ "$is_git" == true ]]; then
+      local gen=$(nixos-rebuild list-generations --flake . 2>/dev/null | grep -P '\d+(?=\s+current)' | awk '{print $1}')
+      local real_user=${SUDO_USER:-$USER}
+      local real_host=$(hostname)
 
-    sudo git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
-      commit --amend -m "Gen $gen (${actions[*]}): finalized" --no-edit > /dev/null 2>&1
-    echo "Rebuild successful. Generation $gen active."
+      git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
+        commit --amend -m "Gen $gen (${actions[*]}): finalized" --no-edit >/dev/null 2>&1
+      echo "Rebuild successful. Generation $gen active."
+    else
+      echo "Rebuild successful (No Git history to update)."
+    fi
   else
     echo "Rebuild failed."
     return 1
