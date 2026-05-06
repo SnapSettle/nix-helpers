@@ -1,4 +1,4 @@
-rbf() (
+rbf() {
   local actions=()
   local extra_args=()
   local do_update=false
@@ -23,26 +23,24 @@ rbf() (
   local is_git=false
   if [[ -d ".git" ]]; then
     is_git=true
-    # Ensure all files are tracked so Nix Flakes can see them
-    git add .
-    # Refresh index to avoid "false" dirty state errors
-    git update-index -q --refresh
+    sudo git add .
+    sudo git update-index -q --refresh
   fi
 
   if [[ "$do_update" == true ]]; then
     echo "Checking for updates..."
     sudo nix flake update
-    [[ "$is_git" == true ]] && git add flake.lock
+    [[ "$is_git" == true ]] && sudo git add flake.lock
   fi
 
-  if [[ "$is_git" == true ]] && ! git diff --cached --quiet; then
+  if [[ "$is_git" == true ]] && ! sudo git diff --cached --quiet; then
     local real_user=${SUDO_USER:-$USER}
     local real_host=$(hostname)
-    local files=$(git diff --cached --name-only | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+    local files=$(sudo git diff --cached --name-only | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
     local msg="Pre-rebuild (${actions[*]}): $files"
 
     echo "Committing changes: $msg"
-    git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
+    sudo git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
       commit -m "$msg"
   fi
 
@@ -57,11 +55,11 @@ rbf() (
 
   if [[ "$success" == true ]]; then
     if [[ "$is_git" == true ]]; then
-      local gen=$(nixos-rebuild list-generations --flake . 2>/dev/null | grep -P '\d+(?=\s+current)' | awk '{print $1}')
+      local gen=$(sudo nixos-rebuild list-generations --flake . 2>/dev/null | grep -P '\d+(?=\s+current)' | awk '{print $1}')
       local real_user=${SUDO_USER:-$USER}
       local real_host=$(hostname)
 
-      git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
+      sudo git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
         commit --amend -m "Gen $gen (${actions[*]}): finalized" --no-edit >/dev/null 2>&1
       echo "Rebuild successful. Generation $gen active."
     else
@@ -71,7 +69,7 @@ rbf() (
     echo "Rebuild failed."
     return 1
   fi
-)
+}
 
 fzf-open-editor() {
   local file
