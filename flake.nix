@@ -12,7 +12,7 @@
 
         treefmtEval = treefmt-nix.lib.evalModule pkgs {
           projectRootFile = "flake.nix";
-
+          programs.nixpkgs-fmt.enable = true;
           settings.formatter.shell = {
             command = pkgs.shfmt;
             options = [ "-i" "2" "-sr" "-w" ];
@@ -22,6 +22,15 @@
       in
       {
         formatter = treefmtEval.config.build.wrapper;
+
+        packages.default = pkgs.stdenv.mkDerivation {
+          name = "nix-helpers";
+          src = ./shell;
+          installPhase = ''
+            mkdir -p $out/share
+            cp helpers.bash $out/share/helpers.bash
+          '';
+        };
       }
     );
 }
