@@ -1,13 +1,31 @@
 rbf() {
   local actions=()
   local extra_args=()
+
   local do_update=false
+  local update_target=""
+
+  local expect_update_target=false
 
   for arg in "$@"; do
     case "$arg" in
-    boot | switch | test) actions+=("$arg") ;;
-    --up | --update) do_update=true ;;
-    *) extra_args+=("$arg") ;;
+    boot | switch | test)
+      actions+=("$arg")
+      ;;
+
+    --up | --update)
+      do_update=true
+      expect_update_target=true
+      ;;
+
+    *)
+      if [[ "$expect_update_target" == true && "$arg" != --* ]]; then
+        update_target="$arg"
+        expect_update_target=false
+      else
+        extra_args+=("$arg")
+      fi
+      ;;
     esac
   done
 
@@ -21,54 +39,103 @@ rbf() {
   fi
 
   local is_git=false
+
   if [[ -d ".git" ]]; then
     is_git=true
+
     sudo git add .
     sudo git update-index -q --refresh
   fi
 
+  # --------------------------------------------------
+  # Flake updates
+  # --------------------------------------------------
+
   if [[ "$do_update" == true ]]; then
-    echo "Checking for updates..."
-    sudo nix flake update
+    if [[ -n "$update_target" ]]; then
+      echo "Updating flake input: $update_target"
+      sudo nix flake lock --update-input "$update_target"
+    else
+      echo "Updating all flake inputs..."
+      sudo nix flake update
+    fi
+
     [[ "$is_git" == true ]] && sudo git add flake.lock
   fi
 
+  # --------------------------------------------------
+  # Git pre-rebuild commit
+  # --------------------------------------------------
+
   if [[ "$is_git" == true ]] && ! sudo git diff --cached --quiet; then
     local real_user=${SUDO_USER:-$USER}
-    local real_host=$(hostname)
-    local files=$(sudo git diff --cached --name-only | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')
+    local real_host
+    real_host=$(hostname)
+
+    local files
+    files=$(sudo git diff --cached --name-only |
+      tr '\n' ',' |
+      sed 's/,$//' |
+      sed 's/,/, /g')
+
     local msg="Pre-rebuild (${actions[*]}): $files"
 
     echo "Committing changes: $msg"
-    sudo git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
+
+    sudo git \
+      -c "user.name=$real_user" \
+      -c "user.email=$real_user@$real_host" \
       commit -m "$msg"
   fi
 
+  # --------------------------------------------------
+  # Rebuild
+  # --------------------------------------------------
+
   local success=true
+
   for action in "${actions[@]}"; do
     echo "Executing NixOS $action..."
+
     if ! sudo nixos-rebuild "$action" --flake . "${extra_args[@]}"; then
       success=false
       break
     fi
   done
 
+  # --------------------------------------------------
+  # Post rebuild
+  # --------------------------------------------------
+
   if [[ "$success" == true ]]; then
     if [[ "$is_git" == true ]]; then
-      local gen=$(sudo nixos-rebuild list-generations --flake . 2>/dev/null | grep -P '\d+(?=\s+current)' | awk '{print $1}')
-      local real_user=${SUDO_USER:-$USER}
-      local real_host=$(hostname)
+      local gen
 
-      sudo git -c "user.name=$real_user" -c "user.email=$real_user@$real_host" \
-        commit --amend -m "Gen $gen (${actions[*]}): finalized" --no-edit >/dev/null 2>&1
+      gen=$(sudo nixos-rebuild list-generations --flake . 2> /dev/null |
+        awk '$NF == "True" { print $1 }')
+
+      local real_user=${SUDO_USER:-$USER}
+
+      local real_host
+      real_host=$(hostname)
+
+      sudo git \
+        -c "user.name=$real_user" \
+        -c "user.email=$real_user@$real_host" \
+        commit --amend \
+        -m "Gen $gen (${actions[*]}): finalized" \
+        > /dev/null 2>&1
+
       echo "Rebuild successful. Generation $gen active."
     else
       echo "Rebuild successful (No Git history to update)."
     fi
+
     popd > /dev/null || true
     return 0
   else
     echo "Rebuild failed."
+
     popd > /dev/null || true
     return 1
   fi
