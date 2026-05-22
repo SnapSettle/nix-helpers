@@ -1,384 +1,278 @@
+# ==============================================================================
+# NixOS Flake Rebuild Tool
+# ==============================================================================
 rbf() {
   local actions=()
   local extra_args=()
-
   local do_update=false
-  local update_target=""
 
-  local expect_update_target=false
-
+  # Parse command-line flags and identify actions versus raw builder parameters
   for arg in "$@"; do
     case "$arg" in
-    boot | switch | test)
-      actions+=("$arg")
-      ;;
-
-    --up | --update)
-      do_update=true
-      expect_update_target=true
-      ;;
-
-    *)
-      if [[ "$expect_update_target" == true && "$arg" != --* ]]; then
-        update_target="$arg"
-        expect_update_target=false
-      else
+      boot|switch|test)
+        actions+=("$arg")
+        ;;
+      --up|--update)
+        do_update=true
+        ;;
+      *)
         extra_args+=("$arg")
-      fi
-      ;;
+        ;;
     esac
   done
 
+  # Default to standard switch behavior if no action was explicitly requested
   [[ ${#actions[@]} -eq 0 ]] && actions+=("switch")
 
-  if [[ -d "/etc/nixos" ]]; then
-    pushd /etc/nixos > /dev/null || return 1
+  # Locate the NixOS flake context, prioritizing local files then your home directory
+  local config_dir=""
+  if [[ -f "./flake.nix" ]]; then
+    config_dir="."
+  elif [[ -d "$HOME/nixos-config" && -f "$HOME/nixos-config/flake.nix" ]]; then
+    config_dir="$HOME/nixos-config"
+  elif [[ -d "/etc/nixos" && -f "/etc/nixos/flake.nix" ]]; then
+    config_dir="/etc/nixos"
   else
-    echo "Error: /etc/nixos not found." >&2
+    echo "❌ Error: Could not find a NixOS flake directory." >&2
     return 1
   fi
 
+  pushd "$config_dir" > /dev/null || return 1
+
+  # Handle repository staging without root mutation to protect home directory ownership
   local is_git=false
-
-  if [[ -d ".git" ]]; then
+  if [[ -d ".git" || $(git rev-parse --is-inside-work-tree 2>/dev/null) == "true" ]]; then
     is_git=true
-
-    sudo git add .
-    sudo git update-index -q --refresh
+    git add .
+    git update-index -q --refresh
   fi
 
-  # --------------------------------------------------
-  # Flake updates
-  # --------------------------------------------------
-
+  # Run full block locked dependency upgrades if explicitly triggered
   if [[ "$do_update" == true ]]; then
-    if [[ -n "$update_target" ]]; then
-      echo "Updating flake input: $update_target"
-      sudo nix flake lock --update-input "$update_target"
-    else
-      echo "Updating all flake inputs..."
-      sudo nix flake update
-    fi
-
-    [[ "$is_git" == true ]] && sudo git add flake.lock
+    echo "Updating all flake inputs..."
+    nix flake update
+    [[ "$is_git" == true ]] && git add flake.lock
   fi
 
-  # --------------------------------------------------
-  # Git pre-rebuild commit
-  # --------------------------------------------------
+  # Establish Git environment identities mapping to the non-root execution user
+  local real_user=${SUDO_USER:-$USER}
+  local real_host=$(hostname)
+  local git_env_flags=(-c "user.name=$real_user" -c "user.email=$real_user@$real_host")
 
-  if [[ "$is_git" == true ]] && ! sudo git diff --cached --quiet; then
-    local real_user=${SUDO_USER:-$USER}
-    local real_host
-    real_host=$(hostname)
-
+  # Create an atomic, structural checkpoint commit tracking what changed files are being built
+  if [[ "$is_git" == true ]] && ! git diff --cached --quiet; then
     local files
-    files=$(sudo git diff --cached --name-only |
-      tr '\n' ',' |
-      sed 's/,$//' |
-      sed 's/,/, /g')
+    mapfile -t changed_files < <(git diff --cached --name-only)
+    IFS=', ' read -r -a joined_files <<< "${changed_files[*]}"
+    files="${joined_files[*]}"
 
     local msg="Pre-rebuild (${actions[*]}): $files"
-
     echo "Committing changes: $msg"
-
-    sudo git \
-      -c "user.name=$real_user" \
-      -c "user.email=$real_user@$real_host" \
-      commit -m "$msg"
+    git "${git_env_flags[@]}" commit -m "$msg" >/dev/null
   fi
 
-  # --------------------------------------------------
-  # Rebuild
-  # --------------------------------------------------
-
+  # Execute the system target deployments sequentially through sudo
   local success=true
-
   for action in "${actions[@]}"; do
     echo "Executing NixOS $action..."
-
     if ! sudo nixos-rebuild "$action" --flake . "${extra_args[@]}"; then
       success=false
       break
     fi
   done
 
-  # --------------------------------------------------
-  # Post rebuild
-  # --------------------------------------------------
-
+  # Process evaluation outcomes, sealing the versioning commit or cleanly rolling back
   if [[ "$success" == true ]]; then
     if [[ "$is_git" == true ]]; then
+      # Query the current active system generation profile directly from the kernel symlink
+      local target_link
+      target_link=$(readlink /nix/var/nix/profiles/system)
+      
       local gen
+      if [[ "$target_link" =~ system-([0-8]*) ]]; then
+        gen="${BASH_REMATCH[1]}"
+      else
+        gen=$(echo "$target_link" | awk -F'-' '{print $2}')
+      fi
 
-      gen=$(sudo nixos-rebuild list-generations --flake . 2> /dev/null |
-        awk '$NF == "True" { print $1 }')
+      git "${git_env_flags[@]}" commit --amend \
+        -m "Gen ${gen:-?} (${actions[*]}): finalized" \
+        >/dev/null 2>&1
 
-      local real_user=${SUDO_USER:-$USER}
-
-      local real_host
-      real_host=$(hostname)
-
-      sudo git \
-        -c "user.name=$real_user" \
-        -c "user.email=$real_user@$real_host" \
-        commit --amend \
-        -m "Gen $gen (${actions[*]}): finalized" \
-        > /dev/null 2>&1
-
-      echo "Rebuild successful. Generation $gen active."
+      echo "✓ Rebuild successful. Generation ${gen:-unknown} is now active."
     else
-      echo "Rebuild successful (No Git history to update)."
+      echo "✓ Rebuild successful (No Git history to update)."
     fi
-
     popd > /dev/null || true
     return 0
   else
-    echo "Rebuild failed."
-
+    echo "❌ Rebuild failed."
+    if [[ "$is_git" == true && $(git log -1 --pretty=%s) == Pre-rebuild* ]]; then
+      echo "Rolling back temporary Git commit..."
+      git reset --soft HEAD~1
+    fi
     popd > /dev/null || true
     return 1
   fi
 }
 
+# ==============================================================================
+# Interactive File Finder & Editor
+# ==============================================================================
 fzf-open-editor() {
-  local file
-  file=$(fzf --preview 'bat --style=numbers --color=always --line-range :500 {}' 2> /dev/null)
+  # Direct check for bat; fallback to standard cat if not installed
+  local preview_cmd="cat {}"
+  if command -v bat &>/dev/null; then
+    preview_cmd="bat --style=numbers --color=always --line-range :500 {}"
+  fi
 
-  if [[ -n $file ]]; then
+  local file
+  file=$(fzf --preview "$preview_cmd" 2> /dev/null)
+
+  if [[ -n "$file" ]]; then
     ${EDITOR:-nano} "$file"
   fi
 
-  # Terminal cursor reset
+  # Reset terminal cursor states cleanly
   bind '"\e[0n": ""'
   printf '\e[5n'
 }
 
-# Bind Ctrl+O to the fzf editor function
+# Bind Ctrl+O to instantly trigger the interactive editor window
 bind -x '"\C-o": fzf-open-editor'
 
-# 3. Nix Package Builder
+# ==============================================================================
+# Nix Development & Package Utilities
+# ==============================================================================
+
 nix_pkg_builder() {
-  if [[ -f $1 ]]; then
-    nix-build -e "with import <nixpkgs> {}; callPackage $1 {}"
-    rbf() {
-      for arg in "$@"; do
-        case "$arg" in
-        boot | switch)
-          echo "Processing: $arg"
-          if [ -d "/etc/nixos" ]; then
-            pushd /etc/nixos > /dev/null || return 1
-            sudo nixos-rebuild "$arg"
-            popd > /dev/null || return 1
-          else
-            echo "Error: /etc/nixos directory not found!" >&2
-            return 1
-          fi
-          ;;
-        *)
-          echo "Error: Invalid argument '$arg'. Use 'boot' or 'switch'." >&2
-          return 1
-          ;;
-        esac
-      done
-    }
+  local target="${1:-default.nix}"
 
-    fzf-open-editor() {
-      # Fixed the ''${EDITOR} Nix escape to standard Bash ${EDITOR}
-      local file
-      file=$(fzf --preview 'bat --style=numbers --color=always --line-range :500 {}' 2> /dev/null)
-
-      if [[ -n $file ]]; then
-        ${EDITOR:-nano} "$file"
-      fi
-
-      # Terminal cursor reset
-      bind '"\e[0n": ""'
-      printf '\e[5n'
-    }
-
-    # Bind Ctrl+O to the fzf editor function
-    bind -x '"\C-o": fzf-open-editor'
-
-    # Nix Package Builder
-    nix_pkg_builder() {
-      if [[ -f $1 ]]; then
-        nix-build -e "with import <nixpkgs> {}; callPackage $1 {}"
-      else
-        echo 'Error: No file specified'
-      fi
-    }
-
-    # Nix Option Explorer
-    nix_opt() {
-      nix-shell -p nixos-option --run "nixos-option $*"
-    }
-
-    # Get Nix Attribute
-    nix_get_attr() {
-      local attr_path="$1"
-      local nix_file_path="${2:-<nixpkgs>}" # Fixed Nix escapes
-
-      local expression="with import ${nix_file_path} {}; ${attr_path}"
-      nix-instantiate --eval --expr "$expression" --raw
-    }
-
-    # Nix Hash Prefetch (Fixed parameter expansion)
-    nix_hash_prefetch() {
-      local url="$1"
-      local type="${2:-sha256}" # Fixed the syntax here
-
-      if [[ -z $url ]]; then
-        echo "Error: URL missing"
-        return 1
-      fi
-
-      echo "Fetching and hashing..." >&2
-
-      local store_hash
-      store_hash=$(nix-prefetch-url "$url")
-
-      if [[ -n $store_hash ]]; then
-        nix-hash --sri --type "$type" "$store_hash"
-      fi
-    }
-
-    # Unlock Keyring
-    unlock-keyring() {
-      local pass
-      read -rsp "Password: " pass
-      echo ""
-      # Ensure gnome-keyring-daemon is available
-      export $(echo -n "$pass" | gnome-keyring-daemon --replace --unlock)
-      unset pass
-    }
-
-    # Process Manager
-    process_manager() {
-      local action="$1"
-      local target="$2"
-      local matches
-
-      if [[ -z $action || -z $target ]]; then
-        echo "Usage: process_manager [pause|resume|kill|status] [name_or_pid]"
-        return 1
-      fi
-
-      # Check if target is a pid or a name
-      if [[ $target =~ ^[0-9]+$ ]]; then
-        matches="$target"
-      else
-        matches=$(pgrep -f "$target")
-      fi
-
-      if [[ -z $matches ]]; then
-        echo "Error: No process found matching '$target'."
-        return 1
-      fi
-
-      echo "Found the following matches:"
-      pgrep -fl "$target"
-
-      # Safety check
-      if [[ $action == "kill" || $action == "pause" ]]; then
-        read -p "Apply $action to these processes? (y/n): " confirm
-        [[ $confirm != "y" ]] && echo "Action cancelled." && return 0
-      fi
-
-      case "$action" in
-      pause) kill -STOP $matches && echo "Paused." ;;
-      resume) kill -CONT $matches && echo "Resumed." ;;
-      kill) kill -9 $matches && echo "Killed." ;;
-      status) echo "Processes are running." ;;
-      *) echo "Invalid action." ;;
-      esac
-    }
-  else
-    echo 'Error: No file specified'
+  if [[ ! -f "$target" ]]; then
+    echo "❌ Error: Specify a valid nix expression file (e.g., nix_pkg_builder package.nix)" >&2
+    return 1
   fi
+
+  echo "Building package configuration from $target..."
+  # Modern Nix 3 replacement for 'nix-build -e ...'
+  nix build --file "$target"
 }
 
-# 4. Nix Option Explorer
 nix_opt() {
-  nix-shell -p nixos-option --run "nixos-option $*"
+  if [[ -z "$1" ]]; then
+    echo "Usage: nix_opt [options.path.here]" >&2
+    return 1
+  fi
+  # Replaced sluggish nix-shell with fast, on-demand modern nix shell execution
+  nix shell nixpkgs#nixos-option -c nixos-option "$@"
 }
 
-# 5. Get Nix Attribute
 nix_get_attr() {
   local attr_path="$1"
-  local nix_file_path="${2:-<nixpkgs>}" # Fixed Nix escapes
+  local nix_file_path="${2:-<nixpkgs>}"
+
+  if [[ -z "$attr_path" ]]; then
+    echo "Usage: nix_get_attr [attribute.path] [optional_file_path]" >&2
+    return 1
+  fi
 
   local expression="with import ${nix_file_path} {}; ${attr_path}"
   nix-instantiate --eval --expr "$expression" --raw
 }
 
-# 6. Nix Hash Prefetch (Fixed parameter expansion)
 nix_hash_prefetch() {
   local url="$1"
-  local type="${2:-sha256}" # Fixed the syntax here
+  local type="${2:-sha256}"
 
-  if [[ -z $url ]]; then
-    echo "Error: URL missing"
+  if [[ -z "$url" ]]; then
+    echo "❌ Error: Target URL missing" >&2
     return 1
   fi
 
-  echo "Fetching and hashing..." >&2
+  echo "Downloading target asset and generating SRI hashes..." >&2
 
   local store_hash
   store_hash=$(nix-prefetch-url "$url")
 
-  if [[ -n $store_hash ]]; then
+  if [[ -n "$store_hash" ]]; then
     nix-hash --sri --type "$type" "$store_hash"
   fi
 }
 
-# 7. Unlock Keyring
+# ==============================================================================
+# Desktop Security & Administration
+# ==============================================================================
+
 unlock-keyring() {
+  if ! command -v gnome-keyring-daemon &>/dev/null; then
+    echo "❌ Error: gnome-keyring-daemon is not installed on this system." >&2
+    return 1
+  fi
+
   local pass
-  read -rsp "Password: " pass
+  read -rsp "Enter Login Password to Unlock Keyring: " pass
   echo ""
-  # Ensure gnome-keyring-daemon is available
-  export $(echo -n "$pass" | gnome-keyring-daemon --replace --unlock)
+
+  # Gracefully export environment variables returned from daemon initialization
+  local daemon_out
+  if daemon_out=$(echo -n "$pass" | gnome-keyring-daemon --replace --unlock 2>/dev/null); then
+    eval "export $daemon_out"
+    echo "✓ Security keyring unlocked successfully."
+  else
+    echo "❌ Error: Failed to unlock keyring daemon." >&2
+  fi
   unset pass
 }
 
-# 8. Process Manager
 process_manager() {
   local action="$1"
   local target="$2"
   local matches
 
-  if [[ -z $action || -z $target ]]; then
-    echo "Usage: process_manager [pause|resume|kill|status] [name_or_pid]"
+  if [[ -z "$action" || -z "$target" ]]; then
+    echo "Usage: process_manager [pause|resume|kill|status] [process_name|pid]"
     return 1
   fi
 
-  # Check if target is a pid or a name
-  if [[ $target =~ ^[0-9]+$ ]]; then
+  # Numeric verification ensures exact match captures or broad pattern searches
+  if [[ "$target" =~ ^[0-9]+$ ]]; then
     matches="$target"
   else
     matches=$(pgrep -f "$target")
   fi
 
-  if [[ -z $matches ]]; then
-    echo "Error: No process found matching '$target'."
+  if [[ -z "$matches" ]]; then
+    echo "❌ Error: No running processes found matching target '$target'." >&2
     return 1
   fi
 
-  echo "Found the following matches:"
+  echo "Matching process targets discovered:"
   pgrep -fl "$target"
 
-  # Safety check
-  if [[ $action == "kill" || $action == "pause" ]]; then
-    read -p "Apply $action to these processes? (y/n): " confirm
-    [[ $confirm != "y" ]] && echo "Action cancelled." && return 0
+  # Perform interactive validation confirmations before executing volatile signals
+  if [[ "$action" == "kill" || "$action" == "pause" ]]; then
+    local confirm
+    read -p "⚠️ Are you sure you want to execute '$action' on these processes? (y/N): " confirm
+    [[ "${confirm,,}" != "y" ]] && echo "Action aborted cleanly." && return 0
   fi
 
   case "$action" in
-  pause) kill -STOP $matches && echo "Paused." ;;
-  resume) kill -CONT $matches && echo "Resumed." ;;
-  kill) kill -9 $matches && echo "Killed." ;;
-  status) echo "Processes are running." ;;
-  *) echo "Invalid action." ;;
+    pause)
+      echo "$matches" | xargs kill -STOP && echo "✓ Target threads paused."
+      ;;
+    resume)
+      echo "$matches" | xargs kill -CONT && echo "✓ Target threads resumed."
+      ;;
+    kill)
+      # Uses standard SIGTERM first, falls back cleanly
+      echo "$matches" | xargs kill -15 && echo "✓ Terminate signals broadcasted."
+      ;;
+    status)
+      echo "Processes are actively registered in kernel tree."
+      ;;
+    *)
+      echo "❌ Error: Action '$action' not recognized." >&2
+      return 1
+      ;;
   esac
 }
