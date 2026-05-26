@@ -2,118 +2,83 @@
 # NixOS Flake Rebuild Tool
 # ==============================================================================
 rbf() {
-  local actions=()
-  local extra_args=()
-  local do_update=false
+  local actions=() extra_args=() do_update=false hostname=""
 
-  # Parse command-line flags and identify actions versus raw builder parameters
-  for arg in "$@"; do
-    case "$arg" in
-      boot|switch|test)
-        actions+=("$arg")
-        ;;
-      --up|--update)
-        do_update=true
-        ;;
-      *)
-        extra_args+=("$arg")
-        ;;
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      boot|switch|test) actions+=("$1"); shift ;;
+      --up-all|--update-all) do_update=true; shift ;;
+      --hostname) hostname="$2"; shift 2 ;;
+      *) extra_args+=("$1"); shift ;;
     esac
   done
 
-  # Default to standard switch behavior if no action was explicitly requested
   [[ ${#actions[@]} -eq 0 ]] && actions+=("switch")
 
-  # Locate the NixOS flake context, prioritizing local files then your home directory
   local config_dir=""
-  if [[ -f "./flake.nix" ]]; then
-    config_dir="."
-  elif [[ -d "$HOME/nixos-config" && -f "$HOME/nixos-config/flake.nix" ]]; then
-    config_dir="$HOME/nixos-config"
-  elif [[ -d "/etc/nixos" && -f "/etc/nixos/flake.nix" ]]; then
-    config_dir="/etc/nixos"
-  else
+  for dir in "." "/etc/nixos"; do
+    if [[ -f "$dir/flake.nix" ]]; then
+      config_dir="$dir"; break
+    fi
+  done
+
+  if [[ -z "$config_dir" ]]; then
     echo "❌ Error: Could not find a NixOS flake directory." >&2
     return 1
   fi
 
   pushd "$config_dir" > /dev/null || return 1
 
-  # Handle repository staging without root mutation to protect home directory ownership
   local is_git=false
-  if [[ -d ".git" || $(git rev-parse --is-inside-work-tree 2>/dev/null) == "true" ]]; then
+  if git rev-parse --is-inside-work-tree &>/dev/null; then
     is_git=true
-    git add .
-    git update-index -q --refresh
+    git add . # Staging before Nix operations
   fi
 
-  # Run full block locked dependency upgrades if explicitly triggered
   if [[ "$do_update" == true ]]; then
     echo "Updating all flake inputs..."
     nix flake update
     [[ "$is_git" == true ]] && git add flake.lock
   fi
 
-  # Establish Git environment identities mapping to the non-root execution user
   local real_user=${SUDO_USER:-$USER}
-  local real_host=$(hostname)
-  local git_env_flags=(-c "user.name=$real_user" -c "user.email=$real_user@$real_host")
+  local git_env_flags=(-c "user.name=$real_user" -c "user.email=$real_user@$(hostname)")
 
-  # Create an atomic, structural checkpoint commit tracking what changed files are being built
   if [[ "$is_git" == true ]] && ! git diff --cached --quiet; then
-    local files
-    mapfile -t changed_files < <(git diff --cached --name-only)
-    IFS=', ' read -r -a joined_files <<< "${changed_files[*]}"
-    files="${joined_files[*]}"
-
+    local files=$(git diff --cached --name-only | paste -sd "," -)
     local msg="Pre-rebuild (${actions[*]}): $files"
     echo "Committing changes: $msg"
     git "${git_env_flags[@]}" commit -m "$msg" >/dev/null
   fi
 
-  # Execute the system target deployments sequentially through sudo
-  local success=true
+  local success=true flake_path="."
+  [[ -n "$hostname" ]] && flake_path=".#$hostname"
+
   for action in "${actions[@]}"; do
     echo "Executing NixOS $action..."
-    if ! sudo nixos-rebuild "$action" --flake . "${extra_args[@]}"; then
-      success=false
-      break
-    fi
+    sudo nixos-rebuild "$action" --flake "$flake_path" "${extra_args[@]}" || { success=false; break; }
   done
 
-  # Process evaluation outcomes, sealing the versioning commit or cleanly rolling back
   if [[ "$success" == true ]]; then
     if [[ "$is_git" == true ]]; then
-      # Query the current active system generation profile directly from the kernel symlink
-      local target_link
-      target_link=$(readlink /nix/var/nix/profiles/system)
-      
-      local gen
-      if [[ "$target_link" =~ system-([0-8]*) ]]; then
-        gen="${BASH_REMATCH[1]}"
-      else
-        gen=$(echo "$target_link" | awk -F'-' '{print $2}')
-      fi
-
-      git "${git_env_flags[@]}" commit --amend \
-        -m "Gen ${gen:-?} (${actions[*]}): finalized" \
-        >/dev/null 2>&1
-
-      echo "✓ Rebuild successful. Generation ${gen:-unknown} is now active."
+      local target_link=$(readlink /nix/var/nix/profiles/system)
+      local gen="?"
+      [[ "$target_link" =~ system-([0-9]+)-link ]] && gen="${BASH_REMATCH[1]}"
+      git "${git_env_flags[@]}" commit --amend -m "Gen $gen (${actions[*]}): finalized" >/dev/null 2>&1
+      echo "✓ Rebuild successful. Generation $gen is now active."
     else
       echo "✓ Rebuild successful (No Git history to update)."
     fi
-    popd > /dev/null || true
-    return 0
   else
     echo "❌ Rebuild failed."
     if [[ "$is_git" == true && $(git log -1 --pretty=%s) == Pre-rebuild* ]]; then
       echo "Rolling back temporary Git commit..."
       git reset --soft HEAD~1
     fi
-    popd > /dev/null || true
-    return 1
   fi
+
+  popd > /dev/null || return 1
+  [[ "$success" == true ]]
 }
 
 # ==============================================================================
@@ -203,25 +168,41 @@ nix_hash_prefetch() {
 # Desktop Security & Administration
 # ==============================================================================
 
-unlock-keyring() {
-  if ! command -v gnome-keyring-daemon &>/dev/null; then
-    echo "❌ Error: gnome-keyring-daemon is not installed on this system." >&2
+unlock_keyring() {
+  local desktop="${XDG_CURRENT_DESKTOP,,}"
+  local success=false
+
+  # Handle KDE/Plasma Keyrings (KWallet)
+  if [[ "$desktop" == *"kde"* || "$desktop" == *"plasma"* ]]; then
+    if command -v kwallet-query &>/dev/null; then
+      echo "Detected KDE/Plasma environment. Attempting KWallet access..."
+      # KWallet typically requires a GUI prompt for unlocking; kwallet-query triggers it.
+      if kwallet-query -l kdewallet >/dev/null 2>&1; then
+        echo "✓ KWallet is active/unlocked."
+        success=true
+      fi
+    fi
+  fi
+
+  # Handle GNOME Keyring (also common as a Secret Service backend on KDE)
+  if [[ "$success" == false ]] && command -v gnome-keyring-daemon &>/dev/null; then
+    local pass
+    read -rsp "Enter Login Password to Unlock GNOME Keyring: " pass
+    echo ""
+
+    local daemon_out
+    if daemon_out=$(echo -n "$pass" | gnome-keyring-daemon --replace --unlock 2>/dev/null); then
+      eval "export $daemon_out"
+      echo "✓ GNOME Security keyring unlocked successfully."
+      success=true
+    fi
+    unset pass
+  fi
+
+  if [[ "$success" == false ]]; then
+    echo "❌ Error: Failed to unlock a supported keyring (gnome-keyring or kwallet)." >&2
     return 1
   fi
-
-  local pass
-  read -rsp "Enter Login Password to Unlock Keyring: " pass
-  echo ""
-
-  # Gracefully export environment variables returned from daemon initialization
-  local daemon_out
-  if daemon_out=$(echo -n "$pass" | gnome-keyring-daemon --replace --unlock 2>/dev/null); then
-    eval "export $daemon_out"
-    echo "✓ Security keyring unlocked successfully."
-  else
-    echo "❌ Error: Failed to unlock keyring daemon." >&2
-  fi
-  unset pass
 }
 
 process_manager() {

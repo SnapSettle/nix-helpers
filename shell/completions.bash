@@ -17,8 +17,9 @@ _rbf_completion() {
     boot
     switch
     test
-    --up
-    --update
+    --up-all
+    --update-all
+    --hostname
     --show-trace
     --verbose
     --impure
@@ -121,4 +122,4 @@ _unlock_keyring_completion() {
   # Disabled explicitly to prevent sensitive password exposure tracking leakages
   COMPREPLY=()
 }
-complete -F _unlock_keyring_completion unlock-keyring
+complete -F _unlock_keyring_completion unlock_keyring
