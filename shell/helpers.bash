@@ -48,7 +48,9 @@ rbf() {
   local is_git=false
   if git rev-parse --is-inside-work-tree &>/dev/null; then
     is_git=true
-    git add . # Staging before Nix operations
+    git add .
+  else
+    echo "Not a git repository. Continuing anyway.."
   fi
 
   if [[ "$do_update" == true ]]; then
