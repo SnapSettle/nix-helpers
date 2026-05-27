@@ -2,7 +2,7 @@
 # NixOS Flake Rebuild Tool
 # ==============================================================================
 rbf() {
-  local actions=() extra_args=() do_update=false hostname=""
+  local actions=() extra_args=() do_update=false do_fmt=false hostname=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -17,6 +17,7 @@ rbf() {
         echo "Options:"
         echo "  -h, --help              Show this help message"
         echo "  --up-all, --update-all  Update all flake inputs before rebuilding"
+        echo "  --fmt, --format         Run 'nix fmt' in the flake directory before rebuilding"
         echo "  --hostname <name>       Specify a specific hostname configuration from the flake"
         echo ""
         echo "Extra arguments are passed to 'nixos-rebuild'."
@@ -24,6 +25,7 @@ rbf() {
         ;;
       boot|switch|test) actions+=("$1"); shift ;;
       --up-all|--update-all) do_update=true; shift ;;
+      --fmt|--format) do_fmt=true; shift ;;
       --hostname) hostname="$2"; shift 2 ;;
       *) extra_args+=("$1"); shift ;;
     esac
@@ -51,6 +53,12 @@ rbf() {
     git add .
   else
     echo "Not a git repository. Continuing anyway.."
+  fi
+
+  if [[ "$do_fmt" == true ]]; then
+    echo "Formatting files..."
+    nix fmt
+    [[ "$is_git" == true ]] && git add .
   fi
 
   if [[ "$do_update" == true ]]; then

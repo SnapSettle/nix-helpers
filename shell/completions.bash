@@ -20,6 +20,8 @@ _rbf_completion() {
     --help
     --up-all
     --update-all
+    --fmt
+    --format
     --hostname
     --show-trace
     --verbose
