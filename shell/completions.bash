@@ -18,8 +18,10 @@ _rbf_completion() {
     switch
     test
     --help
-    --up-all
+    --up
     --update-all
+    --up-only
+    --update-only
     --fmt
     --format
     --hostname

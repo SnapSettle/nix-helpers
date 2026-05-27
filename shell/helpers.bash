@@ -2,7 +2,7 @@
 # NixOS Flake Rebuild Tool
 # ==============================================================================
 rbf() {
-  local actions=() extra_args=() do_update=false do_fmt=false hostname=""
+  local actions=() extra_args=() do_update=false do_update_only=false do_fmt=false hostname=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -16,7 +16,8 @@ rbf() {
         echo ""
         echo "Options:"
         echo "  -h, --help              Show this help message"
-        echo "  --up-all, --update-all  Update all flake inputs before rebuilding"
+        echo "  --up, --update-all      Update all flake inputs before rebuilding"
+        echo "  --up-only, --update-only Quickly update flake inputs and exit"
         echo "  --fmt, --format         Run 'nix fmt' in the flake directory before rebuilding"
         echo "  --hostname <name>       Specify a specific hostname configuration from the flake"
         echo ""
@@ -24,7 +25,8 @@ rbf() {
         return 0
         ;;
       boot|switch|test) actions+=("$1"); shift ;;
-      --up-all|--update-all) do_update=true; shift ;;
+      --up|--update-all) do_update=true; shift ;;
+      --up-only|--update-only) do_update_only=true; shift ;;
       --fmt|--format) do_fmt=true; shift ;;
       --hostname) hostname="$2"; shift 2 ;;
       *) extra_args+=("$1"); shift ;;
@@ -50,21 +52,29 @@ rbf() {
   local is_git=false
   if git rev-parse --is-inside-work-tree &>/dev/null; then
     is_git=true
-    git add .
+    git add -A
   else
     echo "Not a git repository. Continuing anyway.."
+  fi
+
+  if [[ "$do_update_only" == true ]]; then
+    echo "Updating all flake inputs..."
+    nix flake update
+    [[ "$is_git" == true ]] && git add -A
+    popd > /dev/null || return 1
+    return 0
   fi
 
   if [[ "$do_fmt" == true ]]; then
     echo "Formatting files..."
     nix fmt
-    [[ "$is_git" == true ]] && git add .
+    [[ "$is_git" == true ]] && git add -A
   fi
 
   if [[ "$do_update" == true ]]; then
     echo "Updating all flake inputs..."
     nix flake update
-    [[ "$is_git" == true ]] && git add flake.lock
+    [[ "$is_git" == true ]] && git add -A
   fi
 
   local real_user=${SUDO_USER:-$USER}
