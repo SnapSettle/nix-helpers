@@ -6,6 +6,22 @@ rbf() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      -h|--help)
+        echo "rbf - NixOS Flake Rebuild Tool"
+        echo ""
+        echo "Usage: rbf [action] [options] [-- extra_args]"
+        echo ""
+        echo "Actions:"
+        echo "  boot|switch|test        NixOS rebuild action to perform (default: switch)"
+        echo ""
+        echo "Options:"
+        echo "  -h, --help              Show this help message"
+        echo "  --up-all, --update-all  Update all flake inputs before rebuilding"
+        echo "  --hostname <name>       Specify a specific hostname configuration from the flake"
+        echo ""
+        echo "Extra arguments are passed to 'nixos-rebuild'."
+        return 0
+        ;;
       boot|switch|test) actions+=("$1"); shift ;;
       --up-all|--update-all) do_update=true; shift ;;
       --hostname) hostname="$2"; shift 2 ;;

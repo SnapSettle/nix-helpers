@@ -17,6 +17,7 @@ _rbf_completion() {
     boot
     switch
     test
+    --help
     --up-all
     --update-all
     --hostname
