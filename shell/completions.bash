@@ -39,9 +39,30 @@ complete -F _rbf_completion rbf
 
 _fzf_open_editor_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
-  COMPREPLY=($(compgen -f -- "$cur"))
+  if [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "-h --help" -- "$cur"))
+  else
+    COMPREPLY=($(compgen -f -- "$cur"))
+  fi
 }
 complete -F _fzf_open_editor_completion fzf-open-editor
+
+_e_completion() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  if [[ "$prev" == "-e" || "$prev" == "--editor" ]]; then
+    COMPREPLY=($(compgen -c -- "$cur"))
+    return
+  fi
+
+  if [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "-h --help -e --editor" -- "$cur"))
+  else
+    COMPREPLY=($(compgen -f -- "$cur"))
+  fi
+}
+complete -F _e_completion e
 
 # ==============================================================================
 # Nix Development & Package Utilities Completions
@@ -49,8 +70,12 @@ complete -F _fzf_open_editor_completion fzf-open-editor
 
 _nix_pkg_builder_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
-  # Only match files matching *.nix extension patterns natively
-  COMPREPLY=($(compgen -f -X '!*.nix' -- "$cur"))
+  if [[ "$cur" == -* ]]; then
+    COMPREPLY=($(compgen -W "-h --help" -- "$cur"))
+  else
+    # Only match files matching *.nix extension patterns natively
+    COMPREPLY=($(compgen -f -X '!*.nix' -- "$cur"))
+  fi
 }
 complete -F _nix_pkg_builder_completion nix_pkg_builder
 
@@ -64,6 +89,8 @@ _nix_opt_completion() {
     boot.loader.systemd-boot.enable
     hardware.graphics.enable
     nix.settings.experimental-features
+    --help
+    -h
   )
 
   COMPREPLY=($(compgen -W "${suggestions[*]}" -- "$cur"))
@@ -80,6 +107,8 @@ _nix_get_attr_completion() {
     pkgs.hello
     lib.attrsets
     lib.strings
+    --help
+    -h
     lib.lists
   )
 
@@ -89,6 +118,11 @@ complete -F _nix_get_attr_completion nix_get_attr
 
 _nix_hash_prefetch_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
+
+  if [[ "$COMP_CWORD" -eq 1 ]]; then
+    COMPREPLY=($(compgen -W "-h --help" -- "$cur"))
+    return
+  fi
 
   # Check position safely to prevent argument leakage downstream
   if [[ "$COMP_CWORD" -eq 2 ]]; then
@@ -100,6 +134,13 @@ _nix_hash_prefetch_completion() {
 }
 complete -F _nix_hash_prefetch_completion nix_hash_prefetch
 
+_nix_clean_completion() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local suggestions=(--user --system --all --help -u -s -a -h)
+  COMPREPLY=($(compgen -W "${suggestions[*]}" -- "$cur"))
+}
+complete -F _nix_clean_completion nix_clean
+
 # ==============================================================================
 # Desktop Security & Administration Completions
 # ==============================================================================
@@ -108,7 +149,7 @@ _process_manager_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
 
   if [[ "$COMP_CWORD" -eq 1 ]]; then
-    COMPREPLY=($(compgen -W "pause resume kill status" -- "$cur"))
+    COMPREPLY=($(compgen -W "pause resume kill status --help -h" -- "$cur"))
     return
   fi
 
@@ -120,7 +161,8 @@ _process_manager_completion() {
 complete -F _process_manager_completion process_manager
 
 _unlock_keyring_completion() {
-  # Disabled explicitly to prevent sensitive password exposure tracking leakages
-  COMPREPLY=()
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local suggestions=(--help -h --gnome --kwallet -g -k)
+  COMPREPLY=($(compgen -W "${suggestions[*]}" -- "$cur"))
 }
 complete -F _unlock_keyring_completion unlock_keyring

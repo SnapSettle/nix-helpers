@@ -103,6 +103,12 @@ rbf() {
 # Interactive File Finder & Editor
 # ==============================================================================
 fzf-open-editor() {
+  if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    echo "Usage: fzf-open-editor"
+    echo "Interactive file search and open tool using fzf and bat."
+    return 0
+  fi
+
   # Direct check for bat; fallback to standard cat if not installed
   local preview_cmd="cat {}"
   if command -v bat &>/dev/null; then
@@ -121,14 +127,56 @@ fzf-open-editor() {
   printf '\e[5n'
 }
 
-# Bind Ctrl+O to instantly trigger the interactive editor window
-bind -x '"\C-o": fzf-open-editor'
+# Bind Ctrl+E to instantly trigger the interactive editor window
+bind -x '"\C-e": fzf-open-editor'
+
+e() {
+  local custom_editor=""
+  local file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        echo "e - Quick Editor"
+        echo ""
+        echo "Usage: e [options] <file>"
+        echo ""
+        echo "Options:"
+        echo "  -e, --editor <cmd>  Specify editor command"
+        echo "  -h, --help          Show this help message"
+        echo ""
+        echo "Automatically uses sudoedit if the file requires root permissions."
+        return 0
+        ;;
+      -e|--editor) custom_editor="$2"; shift 2 ;;
+      *) file="$1"; shift ;;
+    esac
+  done
+
+  if [[ -z "$file" ]]; then
+    echo "❌ Error: File argument missing" >&2
+    return 1
+  fi
+
+  local editor_cmd="${custom_editor:-${EDITOR:-nano}}"
+
+  if [[ -w "$file" || ( ! -e "$file" && -w "$(dirname "$file")" ) ]]; then
+    $editor_cmd "$file"
+  else
+    EDITOR="$editor_cmd" sudoedit "$file"
+  fi
+}
 
 # ==============================================================================
 # Nix Development & Package Utilities
 # ==============================================================================
 
 nix_pkg_builder() {
+  if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    echo "Usage: nix_pkg_builder [target.nix]"
+    return 0
+  fi
+
   local target="${1:-default.nix}"
 
   if [[ ! -f "$target" ]]; then
@@ -142,7 +190,7 @@ nix_pkg_builder() {
 }
 
 nix_opt() {
-  if [[ -z "$1" ]]; then
+  if [[ "$1" == "-h" || "$1" == "--help" || -z "$1" ]]; then
     echo "Usage: nix_opt [options.path.here]" >&2
     return 1
   fi
@@ -154,7 +202,7 @@ nix_get_attr() {
   local attr_path="$1"
   local nix_file_path="${2:-<nixpkgs>}"
 
-  if [[ -z "$attr_path" ]]; then
+  if [[ "$1" == "-h" || "$1" == "--help" || -z "$attr_path" ]]; then
     echo "Usage: nix_get_attr [attribute.path] [optional_file_path]" >&2
     return 1
   fi
@@ -167,7 +215,7 @@ nix_hash_prefetch() {
   local url="$1"
   local type="${2:-sha256}"
 
-  if [[ -z "$url" ]]; then
+  if [[ "$1" == "-h" || "$1" == "--help" || -z "$url" ]]; then
     echo "❌ Error: Target URL missing" >&2
     return 1
   fi
@@ -182,28 +230,92 @@ nix_hash_prefetch() {
   fi
 }
 
+nix_clean() {
+  local user=false system=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        echo "nix_clean - Nix Garbage Collection Helper"
+        echo ""
+        echo "Usage: nix_clean [options]"
+        echo ""
+        echo "Options:"
+        echo "  -u, --user      Clean user-level garbage"
+        echo "  -s, --system    Clean system-level garbage (requires sudo)"
+        echo "  -a, --all       Clean both user and system garbage"
+        echo "  -h, --help      Show this help message"
+        echo ""
+        echo "Default: Both user and system garbage are cleaned if no flags are provided."
+        return 0
+        ;;
+      -u|--user) user=true; shift ;;
+      -s|--system) system=true; shift ;;
+      -a|--all) user=true; system=true; shift ;;
+      *) echo "❌ Error: Unknown option '$1'" >&2; return 1 ;;
+    esac
+  done
+
+  if [[ "$user" == false && "$system" == false ]]; then
+    user=true; system=true
+  fi
+
+  if [[ "$user" == true ]]; then
+    echo "🧹 Cleaning user-level garbage..."
+    nix-collect-garbage -d
+  fi
+
+  if [[ "$system" == true ]]; then
+    echo "🧹 Cleaning system-level garbage (requires sudo)..."
+    sudo nix-collect-garbage -d
+  fi
+}
+
 # ==============================================================================
 # Desktop Security & Administration
 # ==============================================================================
 
 unlock_keyring() {
+  local do_gnome=false do_kwallet=false
+  
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        echo "unlock_keyring - System Keyring Unlocker"
+        echo ""
+        echo "Usage: unlock_keyring [options]"
+        echo ""
+        echo "Options:"
+        echo "  -g, --gnome      Unlock GNOME Keyring"
+        echo "  -k, --kwallet    Unlock KWallet"
+        echo "  -h, --help       Show this help message"
+        echo ""
+        echo "Default: Auto-detects desktop environment if no flags are provided."
+        return 0
+        ;;
+      -g|--gnome) do_gnome=true; shift ;;
+      -k|--kwallet) do_kwallet=true; shift ;;
+      *) echo "❌ Error: Unknown option '$1'" >&2; return 1 ;;
+    esac
+  done
+
   local desktop="${XDG_CURRENT_DESKTOP,,}"
   local success=false
 
+  # Default logic: Use desktop detection if no flags passed
+  if [[ "$do_gnome" == false && "$do_kwallet" == false ]]; then
+    [[ "$desktop" == *"kde"* || "$desktop" == *"plasma"* ]] && do_kwallet=true
+    do_gnome=true
+  fi
+
   # Handle KDE/Plasma Keyrings (KWallet)
-  if [[ "$desktop" == *"kde"* || "$desktop" == *"plasma"* ]]; then
-    if command -v kwallet-query &>/dev/null; then
-      echo "Detected KDE/Plasma environment. Attempting KWallet access..."
-      # KWallet typically requires a GUI prompt for unlocking; kwallet-query triggers it.
-      if kwallet-query -l kdewallet >/dev/null 2>&1; then
-        echo "✓ KWallet is active/unlocked."
-        success=true
-      fi
-    fi
+  if [[ "$do_kwallet" == true ]] && command -v kwallet-query &>/dev/null; then
+    echo "Attempting KWallet access..."
+    kwallet-query -l kdewallet >/dev/null 2>&1 && echo "✓ KWallet is active/unlocked." && success=true
   fi
 
   # Handle GNOME Keyring (also common as a Secret Service backend on KDE)
-  if [[ "$success" == false ]] && command -v gnome-keyring-daemon &>/dev/null; then
+  if { [[ "$do_gnome" == true ]] || [[ "$success" == false ]]; } && command -v gnome-keyring-daemon &>/dev/null; then
     local pass
     read -rsp "Enter Login Password to Unlock GNOME Keyring: " pass
     echo ""
@@ -228,7 +340,7 @@ process_manager() {
   local target="$2"
   local matches
 
-  if [[ -z "$action" || -z "$target" ]]; then
+  if [[ "$1" == "-h" || "$1" == "--help" || -z "$action" || -z "$target" ]]; then
     echo "Usage: process_manager [pause|resume|kill|status] [process_name|pid]"
     return 1
   fi
