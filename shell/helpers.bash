@@ -6,30 +6,49 @@ rbf() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -h|--help)
-        echo "rbf - NixOS Flake Rebuild Tool"
-        echo ""
-        echo "Usage: rbf [action] [options] [-- extra_args]"
-        echo ""
-        echo "Actions:"
-        echo "  boot|switch|test        NixOS rebuild action to perform (default: switch)"
-        echo ""
-        echo "Options:"
-        echo "  -h, --help              Show this help message"
-        echo "  --up, --update-all      Update all flake inputs before rebuilding"
-        echo "  --up-only, --update-only Quickly update flake inputs and exit"
-        echo "  --fmt, --format         Run 'nix fmt' in the flake directory before rebuilding"
-        echo "  --hostname <name>       Specify a specific hostname configuration from the flake"
-        echo ""
-        echo "Extra arguments are passed to 'nixos-rebuild'."
-        return 0
-        ;;
-      boot|switch|test) actions+=("$1"); shift ;;
-      --up|--update-all) do_update=true; shift ;;
-      --up-only|--update-only) do_update_only=true; shift ;;
-      --fmt|--format) do_fmt=true; shift ;;
-      --hostname) hostname="$2"; shift 2 ;;
-      *) extra_args+=("$1"); shift ;;
+    -h | --help)
+      echo "rbf - NixOS Flake Rebuild Tool"
+      echo ""
+      echo "Usage: rbf [action] [options] [-- extra_args]"
+      echo ""
+      echo "Actions:"
+      echo "  boot|switch|test        NixOS rebuild action to perform (default: switch)"
+      echo ""
+      echo "Options:"
+      echo "  -h, --help              Show this help message"
+      echo "  --up, --update-all      Update all flake inputs before rebuilding"
+      echo "  --up-only, --update-only Quickly update flake inputs and exit"
+      echo "  --fmt, --format         Run 'nix fmt' in the flake directory before rebuilding"
+      echo "  --hostname <name>       Specify a specific hostname configuration from the flake"
+      echo ""
+      echo "Extra arguments are passed to 'nixos-rebuild'."
+      return 0
+      ;;
+    boot | switch | test)
+      actions+=("$1")
+      shift
+      ;;
+    --up | --update-all)
+      do_update=true
+      shift
+      ;;
+    --up-only | --update-only)
+      do_update_only=true
+      shift
+      ;;
+    --fmt | --format)
+      do_fmt=true
+      [[ ! " ${extra_args[*]} " =~ " --impure " ]] && impure_flag="--impure"
+      shift
+      ;;
+    --hostname)
+      hostname="$2"
+      shift 2
+      ;;
+    *)
+      extra_args+=("$1")
+      shift
+      ;;
     esac
   done
 
@@ -38,7 +57,8 @@ rbf() {
   local config_dir=""
   for dir in "." "/etc/nixos"; do
     if [[ -f "$dir/flake.nix" ]]; then
-      config_dir="$dir"; break
+      config_dir="$dir"
+      break
     fi
   done
 
@@ -50,7 +70,7 @@ rbf() {
   pushd "$config_dir" > /dev/null || return 1
 
   local is_git=false
-  if git rev-parse --is-inside-work-tree &>/dev/null; then
+  if git rev-parse --is-inside-work-tree &> /dev/null; then
     is_git=true
     git add -A
   else
@@ -84,7 +104,7 @@ rbf() {
     local files=$(git diff --cached --name-only | paste -sd "," -)
     local msg="Pre-rebuild (${actions[*]}): $files"
     echo "Committing changes: $msg"
-    git "${git_env_flags[@]}" commit -m "$msg" >/dev/null
+    git "${git_env_flags[@]}" commit -m "$msg" > /dev/null
   fi
 
   local success=true flake_path="."
@@ -92,7 +112,10 @@ rbf() {
 
   for action in "${actions[@]}"; do
     echo "Executing NixOS $action..."
-    sudo nixos-rebuild "$action" --flake "$flake_path" "${extra_args[@]}" || { success=false; break; }
+    sudo nixos-rebuild "$action" --flake "$flake_path" ${impure_flag} "${extra_args[@]}" || {
+      success=false
+      break
+    }
   done
 
   if [[ "$success" == true ]]; then
@@ -100,10 +123,10 @@ rbf() {
       local target_link=$(readlink /nix/var/nix/profiles/system)
       local gen="?"
       [[ "$target_link" =~ system-([0-9]+)-link ]] && gen="${BASH_REMATCH[1]}"
-      git "${git_env_flags[@]}" commit --amend -m "Gen $gen (${actions[*]}): finalized" >/dev/null 2>&1
-      echo "✓ Rebuild successful. Generation $gen is now active."
+      git "${git_env_flags[@]}" commit --amend -m "Gen $gen (${actions[*]}): finalized" > /dev/null 2>&1
+      echo "✅ Rebuild successful. Generation $gen is now active."
     else
-      echo "✓ Rebuild successful (No Git history to update)."
+      echo "✅ Rebuild successful (No Git history to update)."
     fi
   else
     echo "❌ Rebuild failed."
@@ -129,7 +152,7 @@ fzf-open-editor() {
 
   # Direct check for bat; fallback to standard cat if not installed
   local preview_cmd="cat {}"
-  if command -v bat &>/dev/null; then
+  if command -v bat &> /dev/null; then
     preview_cmd="bat --style=numbers --color=always --line-range :500 {}"
   fi
 
@@ -154,20 +177,26 @@ e() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -h|--help)
-        echo "e - Quick Editor"
-        echo ""
-        echo "Usage: e [options] <file>"
-        echo ""
-        echo "Options:"
-        echo "  -e, --editor <cmd>  Specify editor command"
-        echo "  -h, --help          Show this help message"
-        echo ""
-        echo "Automatically uses sudoedit if the file requires root permissions."
-        return 0
-        ;;
-      -e|--editor) custom_editor="$2"; shift 2 ;;
-      *) file="$1"; shift ;;
+    -h | --help)
+      echo "e - Quick Editor"
+      echo ""
+      echo "Usage: e [options] <file>"
+      echo ""
+      echo "Options:"
+      echo "  -e, --editor <cmd>  Specify editor command"
+      echo "  -h, --help          Show this help message"
+      echo ""
+      echo "Automatically uses sudoedit if the file requires root permissions."
+      return 0
+      ;;
+    -e | --editor)
+      custom_editor="$2"
+      shift 2
+      ;;
+    *)
+      file="$1"
+      shift
+      ;;
     esac
   done
 
@@ -178,7 +207,7 @@ e() {
 
   local editor_cmd="${custom_editor:-${EDITOR:-nano}}"
 
-  if [[ -w "$file" || ( ! -e "$file" && -w "$(dirname "$file")" ) ]]; then
+  if [[ -w "$file" || (! -e "$file" && -w "$(dirname "$file")") ]]; then
     $editor_cmd "$file"
   else
     EDITOR="$editor_cmd" sudoedit "$file"
@@ -253,29 +282,43 @@ nix_clean() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -h|--help)
-        echo "nix_clean - Nix Garbage Collection Helper"
-        echo ""
-        echo "Usage: nix_clean [options]"
-        echo ""
-        echo "Options:"
-        echo "  -u, --user      Clean user-level garbage"
-        echo "  -s, --system    Clean system-level garbage (requires sudo)"
-        echo "  -a, --all       Clean both user and system garbage"
-        echo "  -h, --help      Show this help message"
-        echo ""
-        echo "Default: Both user and system garbage are cleaned if no flags are provided."
-        return 0
-        ;;
-      -u|--user) user=true; shift ;;
-      -s|--system) system=true; shift ;;
-      -a|--all) user=true; system=true; shift ;;
-      *) echo "❌ Error: Unknown option '$1'" >&2; return 1 ;;
+    -h | --help)
+      echo "nix_clean - Nix Garbage Collection Helper"
+      echo ""
+      echo "Usage: nix_clean [options]"
+      echo ""
+      echo "Options:"
+      echo "  -u, --user      Clean user-level garbage"
+      echo "  -s, --system    Clean system-level garbage (requires sudo)"
+      echo "  -a, --all       Clean both user and system garbage"
+      echo "  -h, --help      Show this help message"
+      echo ""
+      echo "Default: Both user and system garbage are cleaned if no flags are provided."
+      return 0
+      ;;
+    -u | --user)
+      user=true
+      shift
+      ;;
+    -s | --system)
+      system=true
+      shift
+      ;;
+    -a | --all)
+      user=true
+      system=true
+      shift
+      ;;
+    *)
+      echo "❌ Error: Unknown option '$1'" >&2
+      return 1
+      ;;
     esac
   done
 
   if [[ "$user" == false && "$system" == false ]]; then
-    user=true; system=true
+    user=true
+    system=true
   fi
 
   if [[ "$user" == true ]]; then
@@ -295,25 +338,34 @@ nix_clean() {
 
 unlock_keyring() {
   local do_gnome=false do_kwallet=false
-  
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -h|--help)
-        echo "unlock_keyring - System Keyring Unlocker"
-        echo ""
-        echo "Usage: unlock_keyring [options]"
-        echo ""
-        echo "Options:"
-        echo "  -g, --gnome      Unlock GNOME Keyring"
-        echo "  -k, --kwallet    Unlock KWallet"
-        echo "  -h, --help       Show this help message"
-        echo ""
-        echo "Default: Auto-detects desktop environment if no flags are provided."
-        return 0
-        ;;
-      -g|--gnome) do_gnome=true; shift ;;
-      -k|--kwallet) do_kwallet=true; shift ;;
-      *) echo "❌ Error: Unknown option '$1'" >&2; return 1 ;;
+    -h | --help)
+      echo "unlock_keyring - System Keyring Unlocker"
+      echo ""
+      echo "Usage: unlock_keyring [options]"
+      echo ""
+      echo "Options:"
+      echo "  -g, --gnome      Unlock GNOME Keyring"
+      echo "  -k, --kwallet    Unlock KWallet"
+      echo "  -h, --help       Show this help message"
+      echo ""
+      echo "Default: Auto-detects desktop environment if no flags are provided."
+      return 0
+      ;;
+    -g | --gnome)
+      do_gnome=true
+      shift
+      ;;
+    -k | --kwallet)
+      do_kwallet=true
+      shift
+      ;;
+    *)
+      echo "❌ Error: Unknown option '$1'" >&2
+      return 1
+      ;;
     esac
   done
 
@@ -327,19 +379,19 @@ unlock_keyring() {
   fi
 
   # Handle KDE/Plasma Keyrings (KWallet)
-  if [[ "$do_kwallet" == true ]] && command -v kwallet-query &>/dev/null; then
+  if [[ "$do_kwallet" == true ]] && command -v kwallet-query &> /dev/null; then
     echo "Attempting KWallet access..."
-    kwallet-query -l kdewallet >/dev/null 2>&1 && echo "✓ KWallet is active/unlocked." && success=true
+    kwallet-query -l kdewallet > /dev/null 2>&1 && echo "✓ KWallet is active/unlocked." && success=true
   fi
 
   # Handle GNOME Keyring (also common as a Secret Service backend on KDE)
-  if { [[ "$do_gnome" == true ]] || [[ "$success" == false ]]; } && command -v gnome-keyring-daemon &>/dev/null; then
+  if { [[ "$do_gnome" == true ]] || [[ "$success" == false ]]; } && command -v gnome-keyring-daemon &> /dev/null; then
     local pass
     read -rsp "Enter Login Password to Unlock GNOME Keyring: " pass
     echo ""
 
     local daemon_out
-    if daemon_out=$(echo -n "$pass" | gnome-keyring-daemon --replace --unlock 2>/dev/null); then
+    if daemon_out=$(echo -n "$pass" | gnome-keyring-daemon --replace --unlock 2> /dev/null); then
       eval "export $daemon_out"
       echo "✓ GNOME Security keyring unlocked successfully."
       success=true
@@ -386,22 +438,22 @@ process_manager() {
   fi
 
   case "$action" in
-    pause)
-      echo "$matches" | xargs kill -STOP && echo "✓ Target threads paused."
-      ;;
-    resume)
-      echo "$matches" | xargs kill -CONT && echo "✓ Target threads resumed."
-      ;;
-    kill)
-      # Uses standard SIGTERM first, falls back cleanly
-      echo "$matches" | xargs kill -15 && echo "✓ Terminate signals broadcasted."
-      ;;
-    status)
-      echo "Processes are actively registered in kernel tree."
-      ;;
-    *)
-      echo "❌ Error: Action '$action' not recognized." >&2
-      return 1
-      ;;
+  pause)
+    echo "$matches" | xargs kill -STOP && echo "✓ Target threads paused."
+    ;;
+  resume)
+    echo "$matches" | xargs kill -CONT && echo "✓ Target threads resumed."
+    ;;
+  kill)
+    # Uses standard SIGTERM first, falls back cleanly
+    echo "$matches" | xargs kill -15 && echo "✓ Terminate signals broadcasted."
+    ;;
+  status)
+    echo "Processes are actively registered in kernel tree."
+    ;;
+  *)
+    echo "❌ Error: Action '$action' not recognized." >&2
+    return 1
+    ;;
   esac
 }

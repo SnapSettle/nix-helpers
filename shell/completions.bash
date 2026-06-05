@@ -53,7 +53,7 @@ complete -F _fzf_open_editor_completion fzf-open-editor
 
 _e_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
-  local prev="${COMP_WORDS[COMP_CWORD-1]}"
+  local prev="${COMP_WORDS[COMP_CWORD - 1]}"
 
   if [[ "$prev" == "-e" || "$prev" == "--editor" ]]; then
     COMPREPLY=($(compgen -c -- "$cur"))
