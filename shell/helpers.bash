@@ -2,7 +2,7 @@
 # NixOS Flake Rebuild Tool
 # ==============================================================================
 rbf() {
-  local actions=() extra_args=() do_update=false do_update_only=false do_fmt=false hostname=""
+  local actions=() extra_args=() do_update=false do_update_only=false do_fmt=false hostname="" impure_flag=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -18,7 +18,7 @@ rbf() {
       echo "  -h, --help              Show this help message"
       echo "  --up, --update-all      Update all flake inputs before rebuilding"
       echo "  --up-only, --update-only Quickly update flake inputs and exit"
-      echo "  --fmt, --format         Run 'nix fmt' in the flake directory before rebuilding"
+      echo "  --fmt, --format         Run 'local_cmd nix fmt' in the flake directory before rebuilding"
       echo "  --hostname <name>       Specify a specific hostname configuration from the flake"
       echo ""
       echo "Extra arguments are passed to 'nixos-rebuild'."
@@ -67,44 +67,57 @@ rbf() {
     return 1
   fi
 
+  local dir_owner
+  dir_owner=$(stat -c "%U" "$config_dir")
+  local use_sudo_for_local=false
+
+  if [[ "$dir_owner" == "root" && "$EUID" -ne 0 ]]; then
+    echo "ℹ️  Flake directory '$config_dir' is owned by root. Using 'sudo' for local modifications."
+    use_sudo_for_local=true
+  fi
+
+  local_cmd() {
+    if [[ "$use_sudo_for_local" == true ]]; then sudo "$@"; else "$@"; fi
+  }
+
   pushd "$config_dir" > /dev/null || return 1
 
   local is_git=false
-  if git rev-parse --is-inside-work-tree &> /dev/null; then
+  if local_cmd git rev-parse --is-inside-work-tree &> /dev/null; then
     is_git=true
-    git add -A
+    local_cmd git add -A
   else
     echo "Not a git repository. Continuing anyway.."
   fi
 
   if [[ "$do_update_only" == true ]]; then
     echo "Updating all flake inputs..."
-    nix flake update
-    [[ "$is_git" == true ]] && git add -A
+    local_cmd nix flake update
+    [[ "$is_git" == true ]] && local_cmd git add -A
     popd > /dev/null || return 1
     return 0
   fi
 
   if [[ "$do_fmt" == true ]]; then
     echo "Formatting files..."
-    nix fmt
-    [[ "$is_git" == true ]] && git add -A
+    local_cmd nix fmt
+    [[ "$is_git" == true ]] && local_cmd git add -A
   fi
 
   if [[ "$do_update" == true ]]; then
     echo "Updating all flake inputs..."
-    nix flake update
-    [[ "$is_git" == true ]] && git add -A
+    local_cmd nix flake update
+    [[ "$is_git" == true ]] && local_cmd git add -A
   fi
 
   local real_user=${SUDO_USER:-$USER}
   local git_env_flags=(-c "user.name=$real_user" -c "user.email=$real_user@$(hostname)")
 
-  if [[ "$is_git" == true ]] && ! git diff --cached --quiet; then
-    local files=$(git diff --cached --name-only | paste -sd "," -)
+  if [[ "$is_git" == true ]] && ! local_cmd git diff --cached --quiet; then
+    local files=$(local_cmd git diff --cached --name-only | paste -sd "," -)
     local msg="Pre-rebuild (${actions[*]}): $files"
     echo "Committing changes: $msg"
-    git "${git_env_flags[@]}" commit -m "$msg" > /dev/null
+    local_cmd git "${git_env_flags[@]}" commit -m "$msg" > /dev/null
   fi
 
   local success=true flake_path="."
@@ -123,16 +136,16 @@ rbf() {
       local target_link=$(readlink /nix/var/nix/profiles/system)
       local gen="?"
       [[ "$target_link" =~ system-([0-9]+)-link ]] && gen="${BASH_REMATCH[1]}"
-      git "${git_env_flags[@]}" commit --amend -m "Gen $gen (${actions[*]}): finalized" > /dev/null 2>&1
+      local_cmd git "${git_env_flags[@]}" commit --amend -m "Gen $gen (${actions[*]}): finalized" > /dev/null 2>&1
       echo "✅ Rebuild successful. Generation $gen is now active."
     else
       echo "✅ Rebuild successful (No Git history to update)."
     fi
   else
     echo "❌ Rebuild failed."
-    if [[ "$is_git" == true && $(git log -1 --pretty=%s) == Pre-rebuild* ]]; then
+    if [[ "$is_git" == true && $(local_cmd git log -1 --pretty=%s) == Pre-rebuild* ]]; then
       echo "Rolling back temporary Git commit..."
-      git reset --soft HEAD~1
+      local_cmd git reset --soft HEAD~1
     fi
   fi
 
