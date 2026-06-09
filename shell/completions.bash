@@ -62,9 +62,26 @@ _e_completion() {
 
   if [[ "$cur" == -* ]]; then
     COMPREPLY=($(compgen -W "-h --help -e --editor" -- "$cur"))
-  else
-    COMPREPLY=($(compgen -f -- "$cur"))
   fi
+
+  local matches
+  local old_ifs="$IFS"
+  IFS=$'\n'
+  matches=($(compgen -f -- "$cur"))
+  IFS="$old_ifs"
+
+  COMPREPLY=()
+  local item
+  for item in "${matches[@]}"; do
+    if [[ -d "$item" ]]; then
+      # If it's a folder, ensure it ends with a slash and tell Bash NOT to add a space
+      COMPREPLY+=("${item%/}/")
+      compopt -o nospace 2> /dev/null
+    else
+      # If it's a file, add it normally (Bash will append a space)
+      COMPREPLY+=("$item")
+    fi
+  done
 }
 complete -F _e_completion e
 
