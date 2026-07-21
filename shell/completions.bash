@@ -8,6 +8,25 @@ __complete_words() {
 }
 
 # ==============================================================================
+# YouTube Music Downloader Completions
+# ==============================================================================
+
+_ytmd_completions() {
+  local cur="${COMP_WORDS[COMP_CWORD]}"
+  local prev="${COMP_WORDS[COMP_CWORD - 1]}"
+  local formats="mp3 flac wav m4a opus aac vorbis alac"
+
+  if [[ "$prev" == "--format" ]]; then
+    __complete_words "$formats"
+  else
+    __complete_words "--format"
+  fi
+}
+
+complete -F _ytmd_completions ytmd
+complete -F _ytmd_completions ytmd-legacy
+
+# ==============================================================================
 # NixOS Flake Rebuild Tool Completions (rbf)
 # ==============================================================================
 

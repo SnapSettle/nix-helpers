@@ -154,6 +154,62 @@ rbf() {
 }
 
 # ==============================================================================
+# YouTube Media Downloader (Legacy & Modern)
+# ==============================================================================
+
+ytmd-legacy() {
+  local url=""
+  local format="mp3"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --format)
+      format="$2"
+      shift 2
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+    esac
+  done
+
+  if [ -z "$url" ]; then
+    echo "Error: Please provide a YouTube URL."
+    echo "Usage: ytmd-legacy <URL> [--format <format>]"
+    return 1
+  fi
+
+  nix-shell -p yt-dlp ffmpeg --run "yt-dlp -x --audio-format \"$format\" \"$url\""
+}
+
+ytmd() {
+  local url=""
+  local format="mp3"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --format)
+      format="$2"
+      shift 2
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+    esac
+  done
+
+  if [ -z "$url" ]; then
+    echo "Error: Please provide a YouTube URL."
+    echo "Usage: ytmd <URL> [--format <format>]"
+    return 1
+  fi
+
+  nix shell nixpkgs#yt-dlp nixpkgs#ffmpeg -c yt-dlp -x --audio-format "$format" "$url"
+}
+
+# ==============================================================================
 # Interactive File Finder & Editor
 # ==============================================================================
 fzf-open-editor() {
