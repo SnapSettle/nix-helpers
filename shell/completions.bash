@@ -36,7 +36,10 @@ _rbf_completion() {
     boot
     switch
     test
+    -h
     --help
+    --d
+    --debug
     --up
     --update-all
     --up-only

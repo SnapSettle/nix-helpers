@@ -4,7 +4,7 @@
 rbf() {
   local actions=() extra_args=() user_specified_action=false
   local do_update=false do_update_only=false do_fmt=false do_fmt_only=false do_push=false
-  local hostname="" impure_flag="--impure"
+  local debug_mode=false hostname="" impure_flag="--impure"
   local config_dir="" dir_owner use_sudo_for_local=false is_git=false
   local real_user git_env_flags files msg target_link gen action
   local success=true flake_path="."
@@ -20,12 +20,14 @@ Actions:
 
 Options:
   -h, --help               Show this help message
+  --d, --debug              DEBUG mode: Show detailed command execution
   --up, --update-all       Update all flake inputs before rebuilding
   --up-only, --update-only Quickly update flake inputs and exit
   --p, --push              Push git commits to remote after successful rebuild
   --fmt, --format          Run 'nix fmt' in the flake directory before rebuilding
   --fmt-only               Only format files in the flake directory and exit
   --hostname <name>        Specify a specific hostname configuration from the flake
+  --d, --debug              DEBUG mode: Show detailed command execution
 
 Extra arguments are passed to 'nixos-rebuild'.
 EOF
@@ -125,6 +127,10 @@ EOF
     -h | --help)
       usage
       return 0
+      ;;
+    --d | --debug)
+      debug_mode=true
+      shift
       ;;
     boot | switch | test)
       actions+=("$1")
@@ -247,8 +253,22 @@ EOF
     local_cmd git "${git_env_flags[@]}" commit -m "$msg" > /dev/null
   fi
 
+  if [[ "$debug_mode" == true ]]; then
+    set -x
+    trap 'set +x; popd > /dev/null 2>&1 || true' RETURN
+  fi
+
   if [[ -n "$hostname" ]]; then
     flake_path=".#$hostname"
+  else
+    flake_path=".#$(hostname)"
+  fi
+
+  if [[ "$debug_mode" == true ]]; then
+    echo "🐛 [DEBUG] Config Dir:  $config_dir" >&2
+    echo "🐛 [DEBUG] Flake Path:  $flake_path" >&2
+    echo "🐛 [DEBUG] Action(s):   ${actions[*]}" >&2
+    echo "🐛 [DEBUG] Extra Args:  ${extra_args[*]}" >&2
   fi
 
   for action in "${actions[@]}"; do
