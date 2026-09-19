@@ -38,24 +38,10 @@ _rbf_completion() {
     test
     -h
     --help
-    --d
-    --debug
     --up
-    --update-all
-    --up-only
-    --update-only
     --fmt
-    --fmt-only
-    --format
-    --p
     --push
     --hostname
-    --show-trace
-    --verbose
-    --impure
-    --dry-run
-    --fast
-    --option
   )
 
   COMPREPLY=($(compgen -W "${suggestions[*]}" -- "$cur"))
