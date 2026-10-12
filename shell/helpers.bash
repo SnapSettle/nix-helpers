@@ -671,25 +671,6 @@ nix_get_attr() {
   nix-instantiate --eval --expr "$expression" --raw
 }
 
-nix_hash_prefetch() {
-  local url="$1"
-  local type="${2:-sha256}"
-
-  if [[ "$1" == "-h" || "$1" == "--help" || -z "$url" ]]; then
-    echo "❌ Error: Target URL missing" >&2
-    return 1
-  fi
-
-  echo "Downloading target asset and generating SRI hashes..." >&2
-
-  local store_hash
-  store_hash=$(nix-prefetch-url "$url")
-
-  if [[ -n "$store_hash" ]]; then
-    nix-hash --sri --type "$type" "$store_hash"
-  fi
-}
-
 nix_clean() {
   local user=false system=false
 

@@ -148,24 +148,6 @@ _nix_get_attr_completion() {
 }
 complete -F _nix_get_attr_completion nix_get_attr
 
-_nix_hash_prefetch_completion() {
-  local cur="${COMP_WORDS[COMP_CWORD]}"
-
-  if [[ "$COMP_CWORD" -eq 1 ]]; then
-    COMPREPLY=($(compgen -W "-h --help" -- "$cur"))
-    return
-  fi
-
-  # Check position safely to prevent argument leakage downstream
-  if [[ "$COMP_CWORD" -eq 2 ]]; then
-    COMPREPLY=($(compgen -W "sha1 sha256 sha512" -- "$cur"))
-    return
-  fi
-
-  COMPREPLY=()
-}
-complete -F _nix_hash_prefetch_completion nix_hash_prefetch
-
 _nix_clean_completion() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local suggestions=(--user --system --all --help -u -s -a -h)
