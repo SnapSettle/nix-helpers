@@ -11,7 +11,7 @@
     in
     {
       nixosModules.default = { pkgs, ... }: {
-        programs.bash.interactiveShellInit = ''
+        environment.interactiveShellInit = ''
           if [[ -f ${self.packages.${pkgs.stdenv.hostPlatform.system}.default}/share/nix-helpers/helpers.bash ]]; then
             source ${self.packages.${pkgs.stdenv.hostPlatform.system}.default}/share/nix-helpers/helpers.bash
           fi
