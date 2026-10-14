@@ -577,12 +577,9 @@ fzf-open-editor() {
   fi
 
   # Reset terminal cursor states cleanly
-  bind '"\e[0n": ""'
+  printf '\e[0n'
   printf '\e[5n'
 }
-
-# Bind Ctrl+E to instantly trigger the interactive editor window
-bind -x '"\C-e": fzf-open-editor'
 
 e() {
   local custom_editor=""
